@@ -10,6 +10,8 @@ import json
 from functools import wraps
 import time
 import logging
+import pandas as pd
+from fake_useragent import UserAgent
 
 HEADERS = {"User-Agent" : "Mozilla/5.0 (Windows; U; Windows NT 5.1; zh-CN; rv:1.9.1.6) ",
   "Accept" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -36,6 +38,8 @@ class GithubCommentCrawer(object):
         self.user_name = user_name
         self.repo_name = repo_name
         self.headers = HEADERS
+        self.headers["User-Agent"] = UserAgent().random
+        logging.info(self.headers)
         self.per_page = 1000
         self.shas = set()
         self.files = []
@@ -43,7 +47,7 @@ class GithubCommentCrawer(object):
     @make_interval(interval_second=6)
     def get_html_content(self, url, params):
         """直接获取url的内容，Exception由外部处理"""
-        r = requests.get(url, params, timeout=5)
+        r = requests.get(url, params, timeout=6)
         r.raise_for_status()
         r.encoding = r.apparent_encoding
         return r.text
@@ -76,7 +80,16 @@ class GithubCommentCrawer(object):
                 json_contents = json.loads(html_content)
                 for files in json_contents.get('files'):
                     if files.get('filename').endswith('.py'):
-                        self.files.append((files.get('patch'), sha))
+                        self.files.append({'patch':files.get('patch'),
+                                           'sha':sha,
+                                           'parents_sha':json_contents.get('parents')[0].get('sha')})
+            except requests.exceptions.ReadTimeout:
+                logging.info("ReadTimeOut!")
+            except requests.exceptions.ConnectionError:
+                logging.info("ConnectionTimeOut!")
+            except requests.exceptions.HTTPError as e:
+                logging.info("HTTPError!", type(e), str(e))
+                time.sleep(55)
             except Exception as e:
                 logging.info("Fail!", type(e), str(e))
             finally:
@@ -100,11 +113,10 @@ class GithubCommentCrawer(object):
         with open("{}-{}-files-{}.txt".format(self.user_name, self.repo_name, sha), 'w') as f:
             f.write(text)
 
-    def save_files(self):
-
-        with open("{}-{}-files.txt".format(self.user_name, self.repo_name), 'w') as f:
-        for (file, sha) in self.files:
-            f.write(file)
+    def save_files(self, filepath):
+        df = pd.DataFrame(data=self.files, columns=['patch', 'sha', 'parents_sha'])
+        print(df)
+        df.to_pickle(filepath)
 
 
 def test_github_crawler():
@@ -112,9 +124,9 @@ def test_github_crawler():
     # gc.init_shas()
     # gc.save_shas()
 
-    gc.load_shas("tensorflow-tensorflow-shas.txt")
+    gc.load_shas("tensorflow-tensorflow-shas.txt", limit=10)
     gc.init_files()
-    gc.save_files()
+    gc.save_files("tensorflow-tensorflow-shas.tar.bz2")
 
 
 def main():
