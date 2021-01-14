@@ -19,6 +19,7 @@ HEADERS = {"User-Agent" : "Mozilla/5.0 (Windows; U; Windows NT 5.1; zh-CN; rv:1.
 
 
 def make_interval(interval_second=1):
+    """装饰器，每次执行之前停顿interval_second秒"""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -41,12 +42,14 @@ class GithubCommentCrawer(object):
 
     @make_interval(interval_second=6)
     def get_html_content(self, url, params):
-        r = requests.get(url, params)
+        """直接获取url的内容，Exception由外部处理"""
+        r = requests.get(url, params, timeout=5)
         r.raise_for_status()
         r.encoding = r.apparent_encoding
         return r.text
 
     def init_shas(self):
+        """爬指定repo的全部commit链接以供之后使用"""
         url = self.url_temp.format(self.user_name, self.repo_name)
         page = 1
         try:
@@ -65,6 +68,7 @@ class GithubCommentCrawer(object):
             print("End with page {}".format(page - 1))
 
     def init_files(self):
+        """遍历链接池，获取commit的内容paste字段"""
         for sha in self.shas:
             url = self.url_temp.format(self.user_name, self.repo_name) + '/' + sha
             try:
@@ -83,12 +87,18 @@ class GithubCommentCrawer(object):
             for sha in self.shas:
                 f.write(sha + '\n')
 
-    def load_shas(self, shas_file_path):
+    def load_shas(self, shas_file_path, limit=100):
         logging.info("current shas number: {}".format(len(self.shas)))
+        shas_temp = []
         with open(shas_file_path, 'r') as f:
             for line in f:
-                self.shas.add(line.strip(' \n'))
+                shas_temp.append(line.strip(' \n'))
+        self.shas = set(shas_temp[:limit])
         logging.info("after loaded shas number: {}".format(len(self.shas)))
+
+    def save_file(self, text, sha):
+        with open("{}-{}-files-{}.txt".format(self.user_name, self.repo_name, sha), 'w') as f:
+            f.write(text)
 
     def save_files(self):
         with open("{}-{}-files.txt".format(self.user_name, self.repo_name), 'w') as f:

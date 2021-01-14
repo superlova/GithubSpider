@@ -1,0 +1,479 @@
+@@ -359,10 +359,50 @@ def decorator(test_method_or_class):
+ _running_in_worker = False
+ 
+ 
++def in_main_process():
++  """Whether it's in the main test process.
++
++  This is normally used to prepare the test environment which should only happen
++  in the main process.
++
++  Returns:
++    A boolean.
++  """
++  return not _running_in_worker
++
++
++class TestEnvironment(object):
++
++  def __init__(self):
++    self.tf_data_service_dispatcher = None
++
++  def __setattr__(self, name, value):
++    if not in_main_process():
++      raise ValueError(
++          "combinations.env() should only be modified in the main process. "
++          "Condition your code on combinations.in_main_process().")
++    super().__setattr__(name, value)
++
++
++_env = TestEnvironment()
++
++
++def env():
++  """Returns the object holds the test environment information.
++
++  Tests should modifies this in the main process if needed, and it will be
++  passed to the worker processes each time a test case is ran.
++
++  Returns:
++    a TestEnvironment object.
++  """
++  return _env
++
++
+ _TestResult = collections.namedtuple("_TestResult", ["status", "message"])
+ 
+ 
+-def _test_runner(test_id):
++def _test_runner(test_id, test_env):
+   """Executes the test with the given test_id.
+ 
+   This is a simple wrapper around TestRunner to be used with
+@@ -372,14 +412,16 @@ def _test_runner(test_id):
+ 
+   Args:
+     test_id: TestCase.id()
++    test_env: a TestEnvironment object.
+ 
+   Returns:
+     A boolean indicates whether the test succeeds.
+   """
+-  global _running_in_worker
++  global _running_in_worker, _env
+   # No need to restore the value of _running_in_worker since it should always be
+   # True in worker processes.
+   _running_in_worker = True
++  _env = test_env
+   test = unittest.defaultTestLoader.loadTestsFromName(test_id)
+   runner = unittest.TextTestRunner()
+   result = runner.run(test)
+@@ -453,15 +495,15 @@ def decorator(self, has_chief, num_workers, runner, **kwargs):
+     #                   [sub process]test_method()
+     test_id = self.id()
+     if runner:
+-      results = runner.run(_test_runner, args=(test_id,))
++      results = runner.run(_test_runner, args=(test_id, _env))
+     else:
+       cluster_spec = multi_worker_test_base.create_cluster_spec(
+           has_chief=has_chief,
+           num_workers=num_workers,
+           num_ps=0,
+           has_eval=False)
+       results = multi_process_runner.run(
+-          _test_runner, cluster_spec, args=(test_id,)).return_value
++          _test_runner, cluster_spec, args=(test_id, _env)).return_value
+ 
+     skip_reason = None
+     for result in results:
+@@ -97,6 +97,24 @@ def testUseWithoutStrategy(self):
+     self.assertNotEqual(os.getenv("TF_CONFIG"), "")
+ 
+ 
++@combinations.generate(combinations.combine(num_workers=2))
++class ClusterCombinationTestEnvTest(test.TestCase, parameterized.TestCase):
++
++  def setUp(self):
++    # Note that test case fixtures are executed in both the main process and
++    # worker processes.
++    super().setUp()
++    if combinations.in_main_process():
++      combinations.env().tf_data_service_dispatcher = "localhost"
++
++  def testTfDataServiceDispatcher(self):
++    self.assertEqual(combinations.env().tf_data_service_dispatcher, "localhost")
++
++  def testUpdateEnvInWorker(self):
++    with self.assertRaises(ValueError):
++      combinations.env().tf_data_service_dispatcher = "localhost"
++
++
+ # unittest.expectedFailure doesn't work with parameterized test methods, so we
+ # have to decorate the class instead.
+ @unittest.expectedFailure
+@@ -1337,7 +1337,7 @@ def convert(self):
+     if calibrate_quantize:
+       result = self._calibrate_quantize_model(result, **flags)
+ 
+-    if self.experimental_new_converter:
++    if self.experimental_new_converter or self._experimental_new_quantizer:
+       flags_modify_model_io_type = quant_mode.flags_modify_model_io_type(
+           self.inference_input_type, self.inference_output_type)
+       if flags_modify_model_io_type:
+@@ -652,7 +652,12 @@ def _modify_model_input_type(model, inference_input_type=dtypes.float32):
+     if builtin_code == schema_fb.BuiltinOperator.QUANTIZE:
+       quant_opcode_idxs.append(idx)
+   if operators and not quant_opcode_idxs:
+-    raise ValueError("Model input is not quantized.")
++    for input_idx in subgraph.inputs:
++      input_type = _convert_tflite_enum_type_to_tf_type(tensors[input_idx].type)
++      if input_type == dtypes.float32:
++        raise ValueError("Model input is not dequantized.")
++    # None of the inputs have float32, then they must be int16, int8, or bool
++    return
+ 
+   # Validate that the model input is quantized
+   input_quant_ops = []
+@@ -663,10 +668,13 @@ def _modify_model_input_type(model, inference_input_type=dtypes.float32):
+       # If found, validate that the operator's input type is float
+       float_type = _convert_tflite_enum_type_to_tf_type(float_tensor.type)
+       if float_type != dtypes.float32:
+-        raise ValueError(
+-            "Initial model input type must be tf.float32. Expected type for "
+-            "tensor with name '{}' is tf.float32, instead type is {}".format(
+-                float_tensor.name, _get_tf_type_name(float_type)))
++        if float_type == inference_input_type:
++          continue
++        else:
++          raise ValueError(
++              "Initial model input type must be tf.float32. Expected type for "
++              "tensor with name '{}' is tf.float32, instead type is {}".format(
++                  float_tensor.name, _get_tf_type_name(float_type)))
+       # If found, validate that the operator output is quantized and compatible
+       # with the final model input type
+       quant_type = _convert_tflite_enum_type_to_tf_type(quant_tensor.type)
+@@ -737,7 +745,12 @@ def _modify_model_output_type(model, inference_output_type=dtypes.float32):
+     if builtin_code == schema_fb.BuiltinOperator.DEQUANTIZE:
+       dequant_opcode_idxs.append(idx)
+   if operators and not dequant_opcode_idxs:
+-    raise ValueError("Model output is not dequantized.")
++    for output in subgraph.outputs:
++      output_type = _convert_tflite_enum_type_to_tf_type(tensors[output].type)
++      if output_type == dtypes.float32:
++        raise ValueError("Model output is not dequantized.")
++    # None of the outputs have float32, then they must be int16, int8, or bool
++    return
+ 
+   # Validate that the model output is dequantized
+   output_dequant_ops = []
+@@ -749,10 +762,13 @@ def _modify_model_output_type(model, inference_output_type=dtypes.float32):
+       quant_tensor, float_tensor = tensors[op.inputs[0]], tensors[op.outputs[0]]
+       float_type = _convert_tflite_enum_type_to_tf_type(float_tensor.type)
+       if float_type != dtypes.float32:
+-        raise ValueError(
+-            "Initial model output type must be tf.float32. Expected type for "
+-            "tensor with name '{}' is tf.float32, instead type is {}".format(
+-                float_tensor.name, _get_tf_type_name(float_type)))
++        if float_type == inference_output_type:
++          continue
++        else:
++          raise ValueError(
++              "Initial model output type must be tf.float32. Expected type for "
++              "tensor with name '{}' is tf.float32, instead type is {}".format(
++                  float_tensor.name, _get_tf_type_name(float_type)))
+       # If found, validate that the operator input is quantized and compatible
+       # with the final model output type
+       quant_type = _convert_tflite_enum_type_to_tf_type(quant_tensor.type)
+@@ -371,11 +371,18 @@ def _run_tflite_inference(model, in_tftype, out_tftype):
+       model = None
+     # Run model inference with float input output type
+     output_data = _run_tflite_inference(model, tf.float32, tf.float32)
+-    # Run model inference with modified integer input output type
++    # Modify the model io types to the target input/output types.
+     model_io = util.modify_model_io_type(model, in_tftype, out_tftype)
++    # Run model inference with modified integer input output type
+     output_io_data = _run_tflite_inference(model_io, in_tftype, out_tftype)
++    # Validate that both the outputs are the same
++    self.assertAllClose(output_data, output_io_data, atol=1.0)
+ 
+-     # Validate that both the outputs are the same
++    # Modify the model with the target input/output types should be a no op.
++    model_io = util.modify_model_io_type(model_io, in_tftype, out_tftype)
++    # Run model inference with modified integer input output type
++    output_io_data = _run_tflite_inference(model_io, in_tftype, out_tftype)
++    # Validate that both the outputs are the same
+     self.assertAllClose(output_data, output_io_data, atol=1.0)
+ 
+ 
+@@ -41,6 +41,16 @@ def make_slice_tests(options):
+           "constant_indices": [False],
+           "fully_quantize": [False],
+       },
++      # 5-D
++      {
++          "dtype": [tf.float32],
++          "index_type": [tf.int32],
++          "input_shape": [[6, 2, 2, 2, 5]],
++          "begin": [[0, 0, 0, 0, 0], [0, 1, 0, 1, 0]],
++          "size": [[4, 2, 2, 2, 3], [5, 2, 1, 1, 5]],
++          "constant_indices": [False],
++          "fully_quantize": [False],
++      },
+       # 2-D
+       {
+           "dtype": [tf.float32, tf.int32, tf.int64, tf.string],
+@@ -156,9 +166,12 @@ def build_inputs(parameters, sess, inputs, outputs):
+       values = [input_values, begin_values, size_values]
+       return values, sess.run(outputs, feed_dict=dict(zip(inputs, values)))
+ 
++  # Note: Not all [begin x size] permutations are compatible for each grouping
++  # of test_parameters, but for brevity we ignore the failures rather than
++  # separating out each compatible set into separate test_parameters entries.
+   make_zip_of_tests(
+       options,
+       test_parameters,
+       build_graph,
+       build_inputs,
+-      expected_tf_failures=27)
++      expected_tf_failures=29)
+@@ -206,6 +206,18 @@ def testFloatOps(self):
+           rtol=1e-4,
+           atol=1e-8)
+ 
++      # Check -inf logits doesn't create NaNs.
++      self._testBinary(
++          gen_nn_ops.sparse_softmax_cross_entropy_with_logits,
++          np.array([[-np.inf, 0.]], dtype=dtype),
++          np.array([1], dtype=np.int32),
++          expected=[
++              np.array([0.], dtype=dtype),
++              np.array([[0., 0.]], dtype=dtype)],
++          equality_test=self.ListsAreClose,
++          rtol=1e-4,
++          atol=1e-8)
++
+       # TODO(b/68813416): Fails with bfloat16.
+       if dtype != dtypes.bfloat16.as_numpy_dtype:
+         self._testBinary(
+@@ -23,7 +23,9 @@
+ 
+ 
+ @tf_export('mlir.experimental.convert_graph_def')
+-def convert_graph_def(graph_def, pass_pipeline='tf-standard-pipeline'):
++def convert_graph_def(graph_def,
++                      pass_pipeline='tf-standard-pipeline',
++                      show_debug_info=False):
+   """Import a GraphDef and convert it to a textual MLIR module.
+ 
+   This API is only intended for inspecting the internals of TensorFlow and the
+@@ -35,6 +37,7 @@ def convert_graph_def(graph_def, pass_pipeline='tf-standard-pipeline'):
+     pass_pipeline: A textual description of an MLIR Pass Pipeline to run on the
+       module, see MLIR documentation for the
+       [textual pass pipeline syntax](https://mlir.llvm.org/docs/PassManagement/#textual-pass-pipeline-specification).
++    show_debug_info: Whether to include locations in the emitted textual form.
+ 
+   Returns:
+     A textual representation of the MLIR module corresponding to the graphdef.
+@@ -44,11 +47,13 @@ def convert_graph_def(graph_def, pass_pipeline='tf-standard-pipeline'):
+       MLIR.
+ 
+   """
+-  return pywrap_mlir.import_graphdef(graph_def, pass_pipeline)
++  return pywrap_mlir.import_graphdef(graph_def, pass_pipeline, show_debug_info)
+ 
+ 
+ @tf_export('mlir.experimental.convert_function')
+-def convert_function(concrete_function, pass_pipeline='tf-standard-pipeline'):
++def convert_function(concrete_function,
++                     pass_pipeline='tf-standard-pipeline',
++                     show_debug_info=False):
+   """Import a ConcreteFunction and convert it to a textual MLIR module.
+ 
+   This API is only intended for inspecting the internals of TensorFlow and the
+@@ -75,6 +80,7 @@ def convert_function(concrete_function, pass_pipeline='tf-standard-pipeline'):
+     pass_pipeline: A textual description of an MLIR Pass Pipeline to run on the
+       module, see MLIR documentation for the
+       [textual pass pipeline syntax](https://mlir.llvm.org/docs/PassManagement/#textual-pass-pipeline-specification).
++    show_debug_info: Whether to include locations in the emitted textual form.
+ 
+   Returns:
+     A textual representation of the MLIR module corresponding to the
+@@ -85,4 +91,5 @@ def convert_function(concrete_function, pass_pipeline='tf-standard-pipeline'):
+       to MLIR.
+ 
+   """
+-  return pywrap_mlir.import_function(concrete_function, pass_pipeline)
++  return pywrap_mlir.import_function(concrete_function, pass_pipeline,
++                                     show_debug_info)
+@@ -51,8 +51,9 @@ def sqr(i):
+ 
+     concrete_function = sqr.get_concrete_function(
+         tensor_spec.TensorSpec(None, dtypes.float32))
+-    mlir_module = mlir.convert_function(concrete_function)
++    mlir_module = mlir.convert_function(concrete_function, show_debug_info=True)
+     self.assertRegex(mlir_module, r'func @.*sqr.*\(')
++    self.assertRegex(mlir_module, r'loc\(')
+ 
+   def testImportWithCall(self):
+ 
+@@ -23,16 +23,17 @@
+ from tensorflow.python._pywrap_mlir import *
+ 
+ 
+-def import_graphdef(graphdef, pass_pipeline):
++def import_graphdef(graphdef, pass_pipeline, show_debug_info):
+   return ImportGraphDef(
+-      str(graphdef).encode('utf-8'), pass_pipeline.encode('utf-8'))
++      str(graphdef).encode('utf-8'), pass_pipeline.encode('utf-8'),
++      show_debug_info)
+ 
+ 
+-def import_function(concrete_function, pass_pipeline):
++def import_function(concrete_function, pass_pipeline, show_debug_info):
+   return ImportFunction(
+       str(concrete_function.function_def).encode('utf-8'),
+       str(concrete_function.graph.as_graph_def().library).encode('utf-8'),
+-      pass_pipeline.encode('utf-8'))
++      pass_pipeline.encode('utf-8'), show_debug_info)
+ 
+ 
+ def experimental_convert_saved_model_to_mlir(saved_model_path, exported_names,
+@@ -139,7 +139,7 @@ def __init__(self,
+     Args:
+       images: The images
+       labels: The labels
+-      fake_data: Ignore inages and labels, use fake data.
++      fake_data: Ignore images and labels, use fake data.
+       one_hot: Bool, return the labels as one hot vectors (if True) or ints (if
+         False).
+       dtype: Output image dtype. One of [uint8, float32]. `uint8` output has
+@@ -331,4 +331,3 @@ def fake():
+   test = _DataSet(test_images, test_labels, **options)
+ 
+   return _Datasets(train=train, validation=validation, test=test)
+-
+@@ -104,7 +104,7 @@ def to_float(x, n):
+ plt.legend()
+ plt.subplot(313)
+ plt.plot(to_float(micro_dft, 22), label='Micro to float')
+-# CMSIS result has 6 fractionanl bits (not 7) due to documentation error (see
++# CMSIS result has 6 fractional bits (not 7) due to documentation error (see
+ # README.md)
+ plt.plot(to_float(cmsis_dft, 6), label='CMSIS to float')
+ plt.plot(py_result, label='Python result')
+@@ -2498,7 +2498,7 @@ def testShapeOverriding(self):
+     self.assertEqual((0., 0.), output_details[1]['quantization'])
+ 
+   def testPartialShapeOverriding(self):
+-    """Test a Functional tf.keras model with parital input shape overriding."""
++    """Test a Functional tf.keras model with partial input shape overriding."""
+     self._getFunctionalModelMultipleInputs()
+ 
+     # Convert to TFLite model.
+@@ -26,7 +26,7 @@ def get_builtin_code_from_operator_code(opcode):
+   """Return the builtin code of the given operator code.
+ 
+   The following method is introduced to resolve op builtin code shortage
+-  problem. The new builtin opreator will be assigned to the extended builtin
++  problem. The new builtin operator will be assigned to the extended builtin
+   code field in the flatbuffer schema. Those methods helps to hide builtin code
+   details.
+ 
+@@ -17,7 +17,7 @@
+ 
+ The functions defined in this library have been copied over from Keras in order
+ to remove the dependency from TensorFlow Lite to Keras. The functions which
+-could not be copied over are accessed using the dependecy inversion principle.
++could not be copied over are accessed using the dependency inversion principle.
+ (for details, refer to tensorflow/python/util/keras_deps.py).
+ """
+ 
+@@ -561,7 +561,7 @@ def compare_model_golden(tflite_model,
+     input_data: np.ndarray to pass into models during inference.
+     golden_name: Name of the file containing the (expected) golden values.
+     update_golden: Whether to update the golden values with the model output
+-      instead of comparing againts them. This should only be done when a change
++      instead of comparing against them. This should only be done when a change
+       in TFLite warrants it.
+     tolerance: Decimal place to check accuracy to. (default 5).
+   """
+@@ -815,7 +815,7 @@ def _test_conversion_quant_float16(converter,
+     golden_name: Optional golden values to compare the output of the model
+       against.
+     update_golden: Whether to update the golden values with the model output
+-      instead of comparing againts them.
++      instead of comparing against them.
+     **kwargs: Additional arguments to be passed into the converter.
+   """
+   tflite_model_float = _convert(converter, version=2, **kwargs)
+@@ -867,7 +867,7 @@ def test_saved_model_v2_quant_float16(directory,
+     golden_name: Optional golden values to compare the output of the model
+       against.
+     update_golden: Whether to update the golden values with the model output
+-      instead of comparing againts them.
++      instead of comparing against them.
+     **kwargs: Additional arguments to be passed into the converter.
+   """
+   converter = _lite.TFLiteConverterV2.from_saved_model(directory)
+@@ -897,7 +897,7 @@ def test_frozen_graph_quant_float16(filename,
+     golden_name: Optional golden values to compare the output of the model
+       against.
+     update_golden: Whether to update the golden values with the model output
+-      instead of comparing againts them.
++      instead of comparing against them.
+     **kwargs: Additional arguments to be passed into the converter.
+   """
+   converter = _lite.TFLiteConverter.from_frozen_graph(filename, input_arrays,
+@@ -35,7 +35,7 @@ def make_not_equal_tests(options):
+   }]
+ 
+   def build_graph(parameters):
+-    """Build the not euqal op testing graph."""
++    """Build the not equal op testing graph."""
+     input_value1 = tf.compat.v1.placeholder(
+         dtype=parameters["input_dtype"],
+         name="input1",
+@@ -85,7 +85,7 @@ def main():
+   parser.add_argument(
+       "--enable_mlir_converter",
+       action="store_true",
+-      help=("Boolean indiciating whether to enable MLIR-based conversion "
++      help=("Boolean indicating whether to enable MLIR-based conversion "
+             "instead of TOCO conversion. (default False)"))
+ 
+   FLAGS, unparsed = parser.parse_known_args()
+@@ -21,7 +21,6 @@
+ import numpy as np
+ 
+ from tensorflow.python.framework import dtypes
+-from tensorflow.python.framework import errors_impl
+ from tensorflow.python.framework import sparse_tensor
+ from tensorflow.python.framework import test_util
+ from tensorflow.python.ops import array_ops
+@@ -132,9 +131,9 @@ def testShapeOverflow(self):
+         dense_shape=[4096, 4096, 4096, 4096, 4096, 4096])
+     self.assertAllEqual(
+         (4096, 4096, 4096, 4096, 4096, 4096), sp_input.get_shape())
+-    with self.assertRaisesRegex(errors_impl.InvalidArgumentError,
+-                                "Shape would have more than"):
+-        sp_output = sparse_ops.sparse_reorder(sp_input)
++    sp_output = sparse_ops.sparse_reorder(sp_input)
++    self.assertAllEqual(
++        (4096, 4096, 4096, 4096, 4096, 4096), sp_output.get_shape())
+ 
+ 
+ if __name__ == "__main__":
+@@ -204,13 +204,9 @@ def _generate_object_paths(object_graph_def):
+   """Traverses through an ObjectGraphDef and builds a map of all node paths."""
+   paths = {0: 'root'}
+   nodes_to_visit = [0]
+-  visited_nodes = set([])
+ 
+   while nodes_to_visit:
+     current_node = nodes_to_visit.pop()
+-    # if current_node in visited_nodes:
+-    #   continue
+-    visited_nodes.add(current_node)
+     current_path = paths[current_node]
+     for reference in object_graph_def.nodes[current_node].children:
+       if reference.node_id in paths:
