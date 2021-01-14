@@ -76,7 +76,7 @@ class GithubCommentCrawer(object):
                 json_contents = json.loads(html_content)
                 for files in json_contents.get('files'):
                     if files.get('filename').endswith('.py'):
-                        self.files.append(files.get('patch'))
+                        self.files.append((files.get('patch'), sha))
             except Exception as e:
                 logging.info("Fail!", type(e), str(e))
             finally:
@@ -101,9 +101,10 @@ class GithubCommentCrawer(object):
             f.write(text)
 
     def save_files(self):
+
         with open("{}-{}-files.txt".format(self.user_name, self.repo_name), 'w') as f:
-            for file in self.files:
-                f.write(file + '\n')
+        for (file, sha) in self.files:
+            f.write(file)
 
 
 def test_github_crawler():

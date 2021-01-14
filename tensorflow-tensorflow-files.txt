@@ -2,51 +2,10 @@
  _running_in_worker = False
  
  
-+def in_main_process():
-+  """Whether it's in the main test process.
-+
-+  This is normally used to prepare the test environment which should only happen
-+  in the main process.
-+
-+  Returns:
-+    A boolean.
-+  """
-+  return not _running_in_worker
-+
-+
-+class TestEnvironment(object):
-+
-+  def __init__(self):
-+    self.tf_data_service_dispatcher = None
-+
-+  def __setattr__(self, name, value):
-+    if not in_main_process():
-+      raise ValueError(
-+          "combinations.env() should only be modified in the main process. "
-+          "Condition your code on combinations.in_main_process().")
-+    super().__setattr__(name, value)
-+
-+
-+_env = TestEnvironment()
-+
-+
-+def env():
-+  """Returns the object holds the test environment information.
-+
-+  Tests should modifies this in the main process if needed, and it will be
-+  passed to the worker processes each time a test case is ran.
-+
-+  Returns:
-+    a TestEnvironment object.
-+  """
-+  return _env
-+
-+
  _TestResult = collections.namedtuple("_TestResult", ["status", "message"])
  
  
 -def _test_runner(test_id):
-+def _test_runner(test_id, test_env):
    """Executes the test with the given test_id.
  
    This is a simple wrapper around TestRunner to be used with
