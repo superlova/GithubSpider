@@ -12,6 +12,7 @@ import time
 import logging
 import pandas as pd
 from fake_useragent import UserAgent
+import random
 
 HEADERS = {"User-Agent" : "Mozilla/5.0 (Windows; U; Windows NT 5.1; zh-CN; rv:1.9.1.6) ",
   "Accept" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -25,8 +26,9 @@ def make_interval(interval_second=1):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            logging.info("interval waiting: {}s".format(interval_second))
-            time.sleep(interval_second)
+            random_offset = random.random()
+            logging.info("interval waiting: {}s".format(interval_second + random_offset))
+            time.sleep(interval_second + random_offset)
             return func(*args, **kwargs)
         return wrapper
     return decorator
@@ -82,6 +84,8 @@ class GithubCommentCrawer(object):
                     if files.get('filename').endswith('.py'):
                         self.files.append({'patch':files.get('patch'),
                                            'sha':sha,
+                                           'status':files.get('status'),
+                                           'filename':files.get('filename'),
                                            'parents_sha':json_contents.get('parents')[0].get('sha')})
             except requests.exceptions.ReadTimeout:
                 logging.info("ReadTimeOut!")
@@ -90,6 +94,7 @@ class GithubCommentCrawer(object):
             except requests.exceptions.HTTPError as e:
                 logging.info("HTTPError!", type(e), str(e))
                 time.sleep(55)
+                self.headers["User-Agent"] = UserAgent().random
             except Exception as e:
                 logging.info("Fail!", type(e), str(e))
             finally:
@@ -114,7 +119,7 @@ class GithubCommentCrawer(object):
             f.write(text)
 
     def save_files(self, filepath):
-        df = pd.DataFrame(data=self.files, columns=['patch', 'sha', 'parents_sha'])
+        df = pd.DataFrame(data=self.files, columns=['patch', 'sha', 'status', 'filename', 'parents_sha'])
         print(df)
         df.to_pickle(filepath)
 
@@ -124,9 +129,13 @@ def test_github_crawler():
     # gc.init_shas()
     # gc.save_shas()
 
-    gc.load_shas("tensorflow-tensorflow-shas.txt", limit=10)
+    gc.load_shas("tensorflow-tensorflow-shas.txt", limit=-1)
     gc.init_files()
     gc.save_files("tensorflow-tensorflow-shas.tar.bz2")
+
+def test_load_df():
+    df = pd.read_pickle("tensorflow-tensorflow-shas.tar.bz2")
+    print(df.iloc[0]['patch'])
 
 
 def main():
@@ -134,6 +143,7 @@ def main():
         level=logging.INFO
     )
     test_github_crawler()
+    # test_load_df()
 
 
 if __name__ == '__main__':
