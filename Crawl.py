@@ -60,19 +60,19 @@ class GithubCommentCrawer(object):
         self.per_page = 1000
         self.SHAs = set()
         self.files = []
-
-        self._init_token()
         self._init_user_agent()
+        self._init_token()
 
     def _init_token(self):
-        user_name = input("please input your user name:\n")
+        # user_name = input("please input your user name:\n")
         token = str(input("please input your token:\n"))
         # print("please input your token:\n")
         # token = getpass.getpass()
-        logging.info("USERNAME: {}".format(user_name))
+        # logging.info("USERNAME: {}".format(user_name))
         logging.info("TOKEN: {}".format(token))
-        self.headers['X-Github-Username'] = user_name
-        self.headers['X-Github-API-Token'] = token
+        # self.headers['X-Github-Username'] = user_name
+        self.headers['Authorization'] = "token " + token
+        self._check_remaining()
 
     @log_tracer()
     def _init_user_agent(self):
@@ -81,16 +81,20 @@ class GithubCommentCrawer(object):
 
     def _check_remaining(self):
         limit_url = "https://api.github.com/rate_limit"
-        text = self.get_html_content(limit_url, params={'headers': self.headers})
+        logging.info(str(repr(self.headers)))
+        text = self.get_html_content(limit_url)
         text_json = json.loads(text)
+        self.rate_limit = text_json["rate"]["limit"]
         rate_remaining = text_json["rate"]["remaining"]
+        logging.info("limit rate: {}".format(self.rate_limit))
         logging.info("remaining rate: {}".format(rate_remaining))
         return rate_remaining
 
-    @make_interval(interval_second=1)
-    def get_html_content(self, url, params):
+    # @make_interval(interval_second=1)
+    def get_html_content(self, url, params=None):
         """直接获取url的内容，Exception由外部处理"""
-        r = requests.get(url, params, timeout=10)
+        r = requests.get(url, params, headers=self.headers, timeout=10)
+        # logging.info(str(repr(r.headers)))
         r.raise_for_status()
         r.encoding = r.apparent_encoding
         return r.text
@@ -101,13 +105,13 @@ class GithubCommentCrawer(object):
         page = 1
         while True:
             try:
-                html_content = self.get_html_content(url, params={'headers': self.headers,
-                                                                  'per_pages': self.per_page,
+                logging.info("crawling page {}".format(page))
+                html_content = self.get_html_content(url, params={'per_pages': self.per_page,
                                                                   'page': page})
                 json_contents = json.loads(html_content)
                 for content in json_contents:
                     self.SHAs.add(content.get('sha'))
-
+                page += 1
             except requests.exceptions.ReadTimeout:
                 logging.info("ReadTimeOut!")
             except requests.exceptions.ConnectionError:
@@ -118,18 +122,19 @@ class GithubCommentCrawer(object):
                     print("No remaining rate! exit.")
                     break
             except Exception as e:
-                logging.info("Fail!, {}, {}".format(type(e), str(e)))
+                logging.critical("Fail!, {}, {}".format(type(e), str(e)))
                 break
             finally:
-                page += 1
-                print("End with page {}".format(page - 1))
+                print("End with page {}".format(page))
 
     def init_files(self):
         """遍历链接池，获取commit的内容paste字段"""
+        SHAs_pool = self.SHAs.copy()
         for sha in self.SHAs:
+            logging.info("crawling SHA {}".format(sha))
             url = self.url_temp.format(self.user_name, self.repo_name) + '/' + sha
             try:
-                html_content = self.get_html_content(url, params={'headers': self.headers})
+                html_content = self.get_html_content(url)
                 json_contents = json.loads(html_content)
                 for files in json_contents.get('files'):
                     if files.get('filename').endswith('.py'):
@@ -140,20 +145,25 @@ class GithubCommentCrawer(object):
                                            'parents_sha': json_contents.get('parents')[0].get('sha')})
             except requests.exceptions.ReadTimeout:
                 logging.info("ReadTimeOut!")
+                continue
             except requests.exceptions.ConnectionError:
                 logging.info("ConnectionTimeOut!")
+                continue
             except requests.exceptions.HTTPError as e:
                 logging.info("HTTPError!, {}, {}".format(type(e), str(e)))
                 if self._check_remaining() == 0:
                     print("No remaining rate! exit.")
                     break
             except Exception as e:
-                logging.info("Fail!, {}, {}".format(type(e), str(e)))
+                logging.critical("Fail!, {}, {}".format(type(e), str(e)))
             finally:
+                SHAs_pool.discard(sha)
                 print("End with length {}".format(len(self.files)))
+        self.SHAs = SHAs_pool
+        self.save_SHAs()
 
     def save_SHAs(self):
-        with open("{}-{}-SHAs.txt".format(self.user_name, self.repo_name), 'w+') as f:
+        with open("{}-{}-SHAs.txt".format(self.user_name, self.repo_name), 'w') as f:
             for sha in self.SHAs:
                 f.write(sha + '\n')
 
@@ -193,6 +203,7 @@ def test_load_df():
 
 def test_token():
     gc = GithubCommentCrawer('tensorflow', "tensorflow")
+
     gc.init_SHAs()
     gc.save_SHAs()
 
@@ -201,8 +212,8 @@ def main():
     logging.basicConfig(
         level=logging.INFO
     )
-    # test_token()
-    test_github_crawler()
+    test_token()
+    # test_github_crawler()
     # test_load_df()
 
 
