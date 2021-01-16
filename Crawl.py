@@ -153,7 +153,7 @@ class GithubCommentCrawer(object):
                 print("End with length {}".format(len(self.files)))
 
     def save_SHAs(self):
-        with open("{}-{}-SHAs.txt".format(self.user_name, self.repo_name), 'w') as f:
+        with open("{}-{}-SHAs.txt".format(self.user_name, self.repo_name), 'w+') as f:
             for sha in self.SHAs:
                 f.write(sha + '\n')
 
@@ -167,7 +167,7 @@ class GithubCommentCrawer(object):
         logging.info("after loaded SHAs number: {}".format(len(self.SHAs)))
 
     def save_file(self, text, sha):
-        with open("{}-{}-files-{}.txt".format(self.user_name, self.repo_name, sha), 'w') as f:
+        with open("{}-{}-files-{}.txt".format(self.user_name, self.repo_name, sha), 'w+') as f:
             f.write(text)
 
     def save_files(self, filepath):
@@ -181,7 +181,7 @@ def test_github_crawler():
     # gc.init_SHAs()
     # gc.save_SHAs()
 
-    gc.load_SHAs("tensorflow-tensorflow-SHAs.txt", limit=-1)
+    gc.load_SHAs("tensorflow-tensorflow-shas.txt", limit=-1)
     gc.init_files()
     gc.save_files("tensorflow-tensorflow-SHAs.tar.bz2")
 
@@ -201,9 +201,10 @@ def main():
     logging.basicConfig(
         level=logging.INFO
     )
-    # test_github_crawler()
+    # test_token()
+    test_github_crawler()
     # test_load_df()
-    test_token()
+
 
 
 if __name__ == '__main__':
