@@ -225,10 +225,10 @@ def main():
     logging.basicConfig(
         level=logging.INFO
     )
-    # test_token()
+    test_token()
     # test_github_crawler()
     # test_load_df()
-    test_end()
+    # test_end()
 
 
 if __name__ == '__main__':
