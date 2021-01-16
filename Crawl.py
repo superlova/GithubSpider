@@ -190,8 +190,8 @@ class GithubCommentCrawer(object):
 
 def test_github_crawler():
     gc = GithubCommentCrawer(user_name='tensorflow', repo_name='tensorflow')
-    # gc.init_SHAs()
-    # gc.save_SHAs()
+    gc.init_SHAs()
+    gc.save_SHAs()
 
     gc.load_SHAs("tensorflow-tensorflow-shas.txt", limit=-1)
     gc.init_files()
@@ -225,8 +225,8 @@ def main():
     logging.basicConfig(
         level=logging.INFO
     )
-    test_token()
-    # test_github_crawler()
+    # test_token()
+    test_github_crawler()
     # test_load_df()
     # test_end()
 
