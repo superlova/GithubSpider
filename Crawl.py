@@ -57,20 +57,15 @@ class GithubCommentCrawer(object):
         self.repo_name = repo_name
 
         self.headers = HEADERS
-        self.per_page = 1000
+        self.per_page = 100
         self.SHAs = set()
         self.files = []
         self._init_user_agent()
         self._init_token()
 
     def _init_token(self):
-        # user_name = input("please input your user name:\n")
         token = str(input("please input your token:\n"))
-        # print("please input your token:\n")
-        # token = getpass.getpass()
-        # logging.info("USERNAME: {}".format(user_name))
         logging.info("TOKEN: {}".format(token))
-        # self.headers['X-Github-Username'] = user_name
         self.headers['Authorization'] = "token " + token
         self._check_remaining()
 
@@ -94,7 +89,6 @@ class GithubCommentCrawer(object):
     def get_html_content(self, url, params=None):
         """直接获取url的内容，Exception由外部处理"""
         r = requests.get(url, params, headers=self.headers, timeout=10)
-        # logging.info(str(repr(r.headers)))
         r.raise_for_status()
         r.encoding = r.apparent_encoding
         return r.text
@@ -106,7 +100,7 @@ class GithubCommentCrawer(object):
         while True:
             try:
                 logging.info("crawling page {}".format(page))
-                html_content = self.get_html_content(url, params={'per_pages': self.per_page,
+                html_content = self.get_html_content(url, params={'per_page': self.per_page,
                                                                   'page': page})
                 json_contents = json.loads(html_content)
                 for content in json_contents:
@@ -123,6 +117,7 @@ class GithubCommentCrawer(object):
                     break
             except Exception as e:
                 logging.critical("Fail!, {}, {}".format(type(e), str(e)))
+                logging.info("length of shas: {}".format(len(self.SHAs)))
                 break
             finally:
                 print("End with page {}".format(page))
@@ -215,7 +210,6 @@ def main():
     test_token()
     # test_github_crawler()
     # test_load_df()
-
 
 
 if __name__ == '__main__':
