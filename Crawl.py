@@ -12,8 +12,7 @@ import time
 import logging
 import pandas as pd
 from fake_useragent import UserAgent
-import random
-import getpass
+
 
 HEADERS = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
            "Accept-Language": "en-us",
@@ -103,6 +102,8 @@ class GithubCommentCrawer(object):
                 html_content = self.get_html_content(url, params={'per_page': self.per_page,
                                                                   'page': page})
                 json_contents = json.loads(html_content)
+                if len(json_contents) == 0:
+                    break  # end of content
                 for content in json_contents:
                     self.SHAs.add(content.get('sha'))
                 page += 1
@@ -124,7 +125,7 @@ class GithubCommentCrawer(object):
 
     def init_files(self):
         """遍历链接池，获取commit的内容paste字段"""
-        SHAs_pool = self.SHAs.copy()
+        watched_shas = set()
         for sha in self.SHAs:
             logging.info("crawling SHA {}".format(sha))
             url = self.url_temp.format(self.user_name, self.repo_name) + '/' + sha
@@ -133,11 +134,15 @@ class GithubCommentCrawer(object):
                 json_contents = json.loads(html_content)
                 for files in json_contents.get('files'):
                     if files.get('filename').endswith('.py'):
-                        self.files.append({'patch': files.get('patch'),
-                                           'sha': sha,
-                                           'status': files.get('status'),
-                                           'filename': files.get('filename'),
-                                           'parents_sha': json_contents.get('parents')[0].get('sha')})
+                        data = {'patch': files.get('patch'),
+                                'sha': sha,
+                                'status': files.get('status'),
+                                'filename': files.get('filename')}
+                        if len(json_contents.get('parents')) >= 1:
+                            data['parents_sha'] = json_contents.get('parents')[0].get('sha')
+                        else:
+                            data['parents_sha'] = ""
+                        self.files.append(data)
             except requests.exceptions.ReadTimeout:
                 logging.info("ReadTimeOut!")
                 continue
@@ -152,17 +157,19 @@ class GithubCommentCrawer(object):
             except Exception as e:
                 logging.critical("Fail!, {}, {}".format(type(e), str(e)))
             finally:
-                SHAs_pool.discard(sha)
+                watched_shas.add(sha)
                 print("End with length {}".format(len(self.files)))
-        self.SHAs = SHAs_pool
+        self.SHAs = self.SHAs - watched_shas
+        logging.info("watched_shas: {}".format(len(watched_shas)))
         self.save_SHAs()
 
     def save_SHAs(self):
-        with open("{}-{}-SHAs.txt".format(self.user_name, self.repo_name), 'w') as f:
+        filename = "{}-{}-SHAs.txt".format(self.user_name, self.repo_name)
+        with open(filename, 'w') as f:
             for sha in self.SHAs:
                 f.write(sha + '\n')
 
-    def load_SHAs(self, SHAs_file_path, limit=100):
+    def load_SHAs(self, SHAs_file_path, limit=-1):
         logging.info("current SHAs number: {}".format(len(self.SHAs)))
         SHAs_temp = []
         with open(SHAs_file_path, 'r') as f:
@@ -171,8 +178,8 @@ class GithubCommentCrawer(object):
         self.SHAs = set(SHAs_temp[:limit])
         logging.info("after loaded SHAs number: {}".format(len(self.SHAs)))
 
-    def save_file(self, text, sha):
-        with open("{}-{}-files-{}.txt".format(self.user_name, self.repo_name, sha), 'w+') as f:
+    def text_to_file(self, text, sha):
+        with open("{}-{}-files-{}.txt".format(self.user_name, self.repo_name, sha), 'w') as f:
             f.write(text)
 
     def save_files(self, filepath):
@@ -202,14 +209,26 @@ def test_token():
     gc.init_SHAs()
     gc.save_SHAs()
 
+def test_end():
+    gc = GithubCommentCrawer("tensorflow", "tensorflow")
+
+    text = gc.get_html_content(url="https://api.github.com/repos/tensorflow/tensorflow/commits?per_page=100&page=1030")
+    content = json.loads(text)
+    print(len(content))
+
+    text = gc.get_html_content(url="https://api.github.com/repos/tensorflow/tensorflow/commits?per_page=100&page=1031")
+    content = json.loads(text)
+    print(len(content))
+
 
 def main():
     logging.basicConfig(
         level=logging.INFO
     )
-    test_token()
+    # test_token()
     # test_github_crawler()
     # test_load_df()
+    test_end()
 
 
 if __name__ == '__main__':
