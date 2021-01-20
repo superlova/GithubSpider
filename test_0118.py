@@ -102,7 +102,7 @@ def main():
     # test_load_txt_to_head10(name='sha3', prefix='tiny', count=10)
     # test_load_txt_to_head10(name='sha4', prefix='tiny', count=10)
     # test_split_dot()
-    test_split_df(4)
+    test_split_df(8)
 
 
 if __name__ == '__main__':

@@ -140,11 +140,13 @@ class GiuHubCommitCrawer(object):
 
 
 class GitHubCompare(object):
-    def __init__(self, user, repo, pickle_filename, token):
+    def __init__(self, user, repo, pickle_filename, token, pid=1):
         self.user = user
         self.repo = repo
         df = pd.read_pickle(pickle_filename)
-        self.df = df[df['status'] == 'modified']  # commit有四个类型，只有modified是前后变动的
+        df = df[df['status'] == 'modified']  # commit有四个类型，只有modified是前后变动的
+        self.df = df.reset_index(drop=True)  # 重设index
+        self.size = len(self.df)
         print(self.df)
 
         self.token = token
@@ -157,6 +159,8 @@ class GitHubCompare(object):
 
         self.minus_lines = []  # 爬到的所有单行注释。后来想想没用，因为我们需要上下文信息。
 
+        self.pid = pid # 进程编号，随便起的数字名称。
+
     def check_remaining(self):
         """查询还剩多少次访问github的机会，一个账号一个小时允许5000次
         返回剩余次数"""
@@ -164,8 +168,8 @@ class GitHubCompare(object):
         text_json = json.loads(text)
         self.rate_limit = text_json["rate"]["limit"]
         rate_remaining = text_json["rate"]["remaining"]
-        print("limit rate: {}".format(self.rate_limit))
-        print("remaining rate: {}".format(rate_remaining))
+        print("process {} limit rate: {}".format(self.pid, self.rate_limit))
+        print("process {} remaining rate: {}".format(self.pid, rate_remaining))
         return rate_remaining
 
     def get_html_content(self, url, retry=5, params=None):
@@ -173,7 +177,7 @@ class GitHubCompare(object):
         如果没有剩余查询次数，就返回中括号字符串，因为返回值要输入json，所以不能直接返回空值"""
         while retry > 0:
             try:
-                logging.info(f"Crawing {url}")
+                logging.info(f"process {self.pid} Crawing {url}")
                 r = requests.get(url, params, headers=self.headers, timeout=10)
                 r.raise_for_status()
                 r.encoding = r.apparent_encoding
@@ -203,12 +207,25 @@ class GitHubCompare(object):
     @timethis
     def traverse_df_add_columns(self):
         """增加两列，用于储存爬取完毕的commit文件和父提交文件"""
-        self.df['origin_content'] = self.df.apply(
-            lambda row: self.get_file_content(row['filename'], row['sha']),
-            axis=1)
-        self.df['parent_content'] = self.df.apply(
-            lambda row: self.get_file_content(row['filename'], row['parents_sha']),
-            axis=1)
+        origin_content = []
+        for index, row in self.df.iterrows():
+            print(f"process {self.pid} origin content crarwing {index / self.size * 100}%")
+            origin_content.append(self.get_file_content(row['filename'], row['sha']))
+        self.df['origin_content'] = origin_content
+
+        # self.df['origin_content'] = self.df.apply(
+        #     lambda row: self.get_file_content(row['filename'], row['sha']),
+        #     axis=1)
+
+        parent_content = []
+        for index, row in self.df.iterrows():
+            print(f"process {self.pid} parent content crarwing {index / self.size * 100}%")
+            parent_content.append(self.get_file_content(row['filename'], row['parents_sha']))
+        self.df['parent_content'] = parent_content
+
+        # self.df['parent_content'] = self.df.apply(
+        #     lambda row: self.get_file_content(row['filename'], row['parents_sha']),
+        #     axis=1)
         self.df['pure_code'] = self.df.apply(
             lambda row: get_diff_file(b2t(row['parent_content']), b2t(row['origin_content'])),
             axis=1)
@@ -308,13 +325,13 @@ def test_github_compare(i):
         group.append(di)
 
     item = group[i]
-    gc = GitHubCompare(user=item['user'], repo=item['repo'], token=item['token'], pickle_filename=item['pickle_filename'])
+    gc = GitHubCompare(pid=i, user=item['user'], repo=item['repo'], token=item['token'], pickle_filename=item['pickle_filename'])
     gc.traverse_df_add_columns()
     gc.save_df(item['pickle_filename'].split('.')[0])
 
 def test_multiprocessing_compare():
     with ProcessPoolExecutor() as pool:
-        pool.map(test_github_compare, [0,1,2,3])
+        pool.map(test_github_compare, [0,1,2,3,4,5,6,7])
 
 
 
