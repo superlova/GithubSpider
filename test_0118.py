@@ -8,6 +8,8 @@
 
 import os
 import configparser
+import pandas as pd
+
 # import requests
 # from requests.adapters import HTTPAdapter
 # from requests.packages.urllib3.util.retry import Retry
@@ -76,12 +78,23 @@ def test_load_txt_to_head10(name, prefix, count=10):
 def test_split_dot():
     print('sha_files.txt'.split('.')[0])
 
+def test_split_df(piece):
+    df = pd.read_pickle("tensorflow-tensorflow-shas.tar.bz2")
+    split_pivot = len(df) // piece
+
+    dfs = []
+    for i in range(piece):
+        dfs.append(df[split_pivot * i: split_pivot * (i + 1)])
+    for i, adf in enumerate(dfs):
+        adf.to_pickle(f"df_{i}.tar.bz2")
+
+
 def main():
     # test_configparser()
-    test_split_sha_files("sha1.txt", "split_sha1.txt", "split_sha2.txt")
-    test_split_sha_files("sha2.txt", "split_sha3.txt", "split_sha4.txt")
-    test_split_sha_files("sha3.txt", "split_sha5.txt", "split_sha6.txt")
-    test_split_sha_files("sha4.txt", "split_sha7.txt", "split_sha8.txt")
+    # test_split_sha_files("sha1.txt", "split_sha1.txt", "split_sha2.txt")
+    # test_split_sha_files("sha2.txt", "split_sha3.txt", "split_sha4.txt")
+    # test_split_sha_files("sha3.txt", "split_sha5.txt", "split_sha6.txt")
+    # test_split_sha_files("sha4.txt", "split_sha7.txt", "split_sha8.txt")
     # test_requests_get_retry()
     # test_json_accept_none()
     # test_load_txt_to_head10(name='sha1', prefix='tiny', count=10)
@@ -89,6 +102,7 @@ def main():
     # test_load_txt_to_head10(name='sha3', prefix='tiny', count=10)
     # test_load_txt_to_head10(name='sha4', prefix='tiny', count=10)
     # test_split_dot()
+    test_split_df(4)
 
 
 if __name__ == '__main__':
