@@ -19,7 +19,6 @@ from Utils import get_diff_file
 from Utils import b2t, timethis
 
 
-
 class GiuHubCommitCrawer(object):
     def __init__(self, user_name, repo_name, token):
         self.url_temp = "https://api.github.com/repos/{}/{}/commits"
@@ -213,19 +212,12 @@ class GitHubCompare(object):
             origin_content.append(self.get_file_content(row['filename'], row['sha']))
         self.df['origin_content'] = origin_content
 
-        # self.df['origin_content'] = self.df.apply(
-        #     lambda row: self.get_file_content(row['filename'], row['sha']),
-        #     axis=1)
-
         parent_content = []
         for index, row in self.df.iterrows():
             print(f"process {self.pid} parent content crarwing {index / self.size * 100}%")
             parent_content.append(self.get_file_content(row['filename'], row['parents_sha']))
         self.df['parent_content'] = parent_content
 
-        # self.df['parent_content'] = self.df.apply(
-        #     lambda row: self.get_file_content(row['filename'], row['parents_sha']),
-        #     axis=1)
         self.df['pure_code'] = self.df.apply(
             lambda row: get_diff_file(b2t(row['parent_content']), b2t(row['origin_content'])),
             axis=1)
@@ -332,8 +324,6 @@ def test_github_compare(i):
 def test_multiprocessing_compare():
     with ProcessPoolExecutor() as pool:
         pool.map(test_github_compare, [0,1,2,3,4,5,6,7])
-
-
 
 
 def main():
